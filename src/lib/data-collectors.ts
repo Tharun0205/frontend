@@ -1,94 +1,75 @@
-// Real data collection implementations for StackPilot
+// lib/metrics/collector.ts
 
-// 1. FRONTEND METRICS COLLECTION
+import { getFCP, getTTFB, getLCP, getCLS, getFID, ReportHandler } from 'web-vitals';
+import os from 'os'
+import process from 'process'
+import fs from 'fs'
+import readline from 'readline'
+
 export class FrontendMetricsCollector {
-  // Collect Core Web Vitals using Web Vitals API
-  static async collectWebVitals() {
-    return new Promise((resolve) => {
-      // Using web-vitals library
-      import("web-vitals").then(({ getCLS, getFID, getFCP, getLCP, getTTFB }) => {
-        const metrics = {
-          cls: 0,
-          fid: 0,
-          fcp: 0,
-          lcp: 0,
-          ttfb: 0,
-        }
+  static async collectWebVitals(): Promise<Record<string, number>> {
+    const metrics: Record<string, number> = {
+      cls: 0,
+      fid: 0,
+      fcp: 0,
+      lcp: 0,
+      ttfb: 0,
+    }
 
-        getCLS((metric) => {
-          metrics.cls = metric.value
-        })
-        getFID((metric) => {
-          metrics.fid = metric.value
-        })
-        getFCP((metric) => {
-          metrics.fcp = metric.value
-        })
-        getLCP((metric) => {
-          metrics.lcp = metric.value
-        })
-        getTTFB((metric) => {
-          metrics.ttfb = metric.value
-        })
+    getCLS(metric => (metrics.cls = metric.value))
+    getFID(metric => (metrics.fid = metric.value))
+    getFCP(metric => (metrics.fcp = metric.value))
+    getLCP(metric => (metrics.lcp = metric.value))
+    getTTFB(metric => (metrics.ttfb = metric.value))
 
-        setTimeout(() => resolve(metrics), 1000)
-      })
-    })
+    return new Promise((resolve) => setTimeout(() => resolve(metrics), 1000))
   }
 
-  // Collect bundle size and performance metrics
   static async collectPerformanceMetrics() {
-    const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming
-    const resources = performance.getEntriesByType("resource")
+    const nav = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming
+    const resources = performance.getEntriesByType("resource") as PerformanceResourceTiming[]
 
-    // Calculate bundle size
-    const jsResources = resources.filter((r) => r.name.includes(".js"))
-    const cssResources = resources.filter((r) => r.name.includes(".css"))
-
-    const bundleSize = jsResources.reduce((total, resource) => {
-      return total + (resource.transferSize || 0)
-    }, 0)
+    const js = resources.filter(r => r.name.endsWith('.js'))
+    const css = resources.filter(r => r.name.endsWith('.css'))
 
     return {
-      loadTime: navigation.loadEventEnd - navigation.fetchStart,
-      domContentLoaded: navigation.domContentLoadedEventEnd - navigation.fetchStart,
-      bundleSize: Math.round(bundleSize / 1024), // KB
+      loadTime: nav.loadEventEnd - nav.fetchStart,
+      domContentLoaded: nav.domContentLoadedEventEnd - nav.fetchStart,
+      bundleSize: Math.round(js.reduce((sum, r) => sum + (r.transferSize || 0), 0) / 1024),
+      jsSize: Math.round(js.reduce((sum, r) => sum + (r.transferSize || 0), 0) / 1024),
+      cssSize: Math.round(css.reduce((sum, r) => sum + (r.transferSize || 0), 0) / 1024),
       resourceCount: resources.length,
-      jsSize: Math.round(jsResources.reduce((total, r) => total + (r.transferSize || 0), 0) / 1024),
-      cssSize: Math.round(cssResources.reduce((total, r) => total + (r.transferSize || 0), 0) / 1024),
     }
   }
 
-  // Lighthouse score via PageSpeed Insights API
   static async getLighthouseScore(url: string) {
     const API_KEY = process.env.NEXT_PUBLIC_PAGESPEED_API_KEY
-    const response = await fetch(
-      `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${url}&key=${API_KEY}&category=performance`,
+    const res = await fetch(
+      `https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${url}&key=${API_KEY}&category=performance`
     )
-    const data = await response.json()
+    const data = await res.json()
+
     return {
-      performance: data.lighthouseResult.categories.performance.score * 100,
-      accessibility: data.lighthouseResult.categories.accessibility.score * 100,
-      bestPractices: data.lighthouseResult.categories["best-practices"].score * 100,
-      seo: data.lighthouseResult.categories.seo.score * 100,
+      performance: data?.lighthouseResult?.categories?.performance?.score * 100,
+      accessibility: data?.lighthouseResult?.categories?.accessibility?.score * 100,
+      bestPractices: data?.lighthouseResult?.categories?.['best-practices']?.score * 100,
+      seo: data?.lighthouseResult?.categories?.seo?.score * 100,
     }
   }
 }
 
-// 2. BACKEND METRICS COLLECTION
 export class BackendMetricsCollector {
-  // Express.js middleware to collect API metrics
   static createMetricsMiddleware() {
     const metrics = new Map()
 
     return {
       middleware: (req: any, res: any, next: any) => {
-        const startTime = Date.now()
+        const start = Date.now()
         const route = `${req.method} ${req.route?.path || req.path}`
 
-        res.on("finish", () => {
-          const responseTime = Date.now() - startTime
-          const statusCode = res.statusCode
+        res.on('finish', () => {
+          const duration = Date.now() - start
+          const status = res.statusCode
 
           if (!metrics.has(route)) {
             metrics.set(route, {
@@ -99,39 +80,28 @@ export class BackendMetricsCollector {
             })
           }
 
-          const routeMetrics = metrics.get(route)
-          routeMetrics.totalRequests++
-          routeMetrics.totalResponseTime += responseTime
-          routeMetrics.statusCodes[statusCode] = (routeMetrics.statusCodes[statusCode] || 0) + 1
-
-          if (statusCode >= 400) {
-            routeMetrics.errorCount++
-          }
+          const data = metrics.get(route)
+          data.totalRequests++
+          data.totalResponseTime += duration
+          data.statusCodes[status] = (data.statusCodes[status] || 0) + 1
+          if (status >= 400) data.errorCount++
         })
 
         next()
       },
       getMetrics: () => {
-        const result = []
-        for (const [route, data] of metrics.entries()) {
-          result.push({
-            route,
-            avgResponseTime: data.totalResponseTime / data.totalRequests,
-            totalRequests: data.totalRequests,
-            errorRate: (data.errorCount / data.totalRequests) * 100,
-            statusCodes: data.statusCodes,
-          })
-        }
-        return result
+        return Array.from(metrics.entries()).map(([route, data]: any) => ({
+          route,
+          avgResponseTime: data.totalResponseTime / data.totalRequests || 0,
+          totalRequests: data.totalRequests,
+          errorRate: (data.errorCount / data.totalRequests) * 100 || 0,
+          statusCodes: data.statusCodes,
+        }))
       },
     }
   }
 
-  // System metrics using Node.js built-ins
   static async getSystemMetrics() {
-    const os = require("os")
-    const process = require("process")
-
     return {
       cpuUsage: process.cpuUsage(),
       memoryUsage: process.memoryUsage(),
@@ -142,89 +112,69 @@ export class BackendMetricsCollector {
     }
   }
 
-  // PM2 metrics (if using PM2)
   static async getPM2Metrics() {
-    const pm2 = require("pm2")
+    const pm2 = await import('pm2')
 
     return new Promise((resolve, reject) => {
-      pm2.list((err: any, processes: any) => {
-        if (err) reject(err)
-
-        const metrics = processes.map((proc: any) => ({
-          name: proc.name,
-          status: proc.pm2_env.status,
-          cpu: proc.monit.cpu,
-          memory: proc.monit.memory,
-          restarts: proc.pm2_env.restart_time,
-          uptime: Date.now() - proc.pm2_env.pm_uptime,
-        }))
-
-        resolve(metrics)
+      pm2.list((err, list) => {
+        if (err) return reject(err)
+        resolve(
+          list.map(proc => ({
+            name: proc.name,
+            status: proc.pm2_env.status,
+            cpu: proc.monit.cpu,
+            memory: proc.monit.memory,
+            restarts: proc.pm2_env.restart_time,
+            uptime: Date.now() - proc.pm2_env.pm_uptime,
+          }))
+        )
       })
     })
   }
 }
 
-// 3. DATABASE METRICS COLLECTION
 export class DatabaseMetricsCollector {
-  // MongoDB metrics
   static async getMongoMetrics(db: any) {
     const stats = await db.stats()
-    const serverStatus = await db.admin().serverStatus()
+    const server = await db.admin().serverStatus()
 
     return {
       collections: stats.collections,
       dataSize: stats.dataSize,
       indexSize: stats.indexSize,
-      connections: serverStatus.connections,
-      opcounters: serverStatus.opcounters,
-      network: serverStatus.network,
-      memory: serverStatus.mem,
+      connections: server.connections,
+      opcounters: server.opcounters,
+      memory: server.mem,
+      network: server.network,
     }
   }
 
-  // Query performance monitoring for MongoDB
   static async getSlowQueries(db: any) {
-    // Enable profiling for slow queries (>100ms)
     await db.setProfilingLevel(1, { slowms: 100 })
-
-    const slowQueries = await db
-      .collection("system.profile")
-      .find({ ts: { $gte: new Date(Date.now() - 3600000) } }) // Last hour
+    const recent = await db
+      .collection('system.profile')
+      .find({ ts: { $gte: new Date(Date.now() - 3600000) } })
       .sort({ ts: -1 })
       .limit(50)
       .toArray()
 
-    return slowQueries.map((query) => ({
-      command: query.command,
-      duration: query.millis,
-      timestamp: query.ts,
-      namespace: query.ns,
+    return recent.map(entry => ({
+      command: entry.command,
+      duration: entry.millis,
+      timestamp: entry.ts,
+      namespace: entry.ns,
     }))
   }
 
-  // PostgreSQL metrics (if using PostgreSQL)
   static async getPostgreSQLMetrics(client: any) {
     const queries = [
-      // Active connections
       "SELECT count(*) as active_connections FROM pg_stat_activity WHERE state = 'active'",
-
-      // Database size
       "SELECT pg_size_pretty(pg_database_size(current_database())) as db_size",
-
-      // Slow queries
-      `SELECT query, mean_time, calls, total_time 
-       FROM pg_stat_statements 
-       ORDER BY mean_time DESC 
-       LIMIT 10`,
-
-      // Cache hit ratio
-      `SELECT 
-         sum(heap_blks_hit) / (sum(heap_blks_hit) + sum(heap_blks_read)) * 100 as cache_hit_ratio
-       FROM pg_statio_user_tables`,
+      `SELECT query, mean_time, calls, total_time FROM pg_stat_statements ORDER BY mean_time DESC LIMIT 10`,
+      `SELECT sum(heap_blks_hit) / (sum(heap_blks_hit) + sum(heap_blks_read)) * 100 as cache_hit_ratio FROM pg_statio_user_tables`,
     ]
 
-    const results = await Promise.all(queries.map((query) => client.query(query)))
+    const results = await Promise.all(queries.map(q => client.query(q)))
 
     return {
       activeConnections: results[0].rows[0].active_connections,
@@ -235,21 +185,18 @@ export class DatabaseMetricsCollector {
   }
 }
 
-// 4. THIRD-PARTY INTEGRATIONS
 export class ThirdPartyIntegrations {
-  // New Relic API integration
   static async getNewRelicMetrics() {
     const API_KEY = process.env.NEW_RELIC_API_KEY
-    const ACCOUNT_ID = process.env.NEW_RELIC_ACCOUNT_ID
 
-    const response = await fetch(`https://api.newrelic.com/v2/applications.json`, {
+    const res = await fetch('https://api.newrelic.com/v2/applications.json', {
       headers: {
-        "X-Api-Key": API_KEY,
-        "Content-Type": "application/json",
+        'X-Api-Key': API_KEY!,
+        'Content-Type': 'application/json',
       },
     })
 
-    const data = await response.json()
+    const data = await res.json()
     return data.applications.map((app: any) => ({
       name: app.name,
       health_status: app.health_status,
@@ -257,55 +204,47 @@ export class ThirdPartyIntegrations {
     }))
   }
 
-  // Datadog API integration
   static async getDatadogMetrics() {
     const API_KEY = process.env.DATADOG_API_KEY
     const APP_KEY = process.env.DATADOG_APP_KEY
 
-    const response = await fetch(`https://api.datadoghq.com/api/v1/query?query=avg:system.cpu.user{*}`, {
+    const res = await fetch(`https://api.datadoghq.com/api/v1/query?query=avg:system.cpu.user{*}`, {
       headers: {
-        "DD-API-KEY": API_KEY,
-        "DD-APPLICATION-KEY": APP_KEY,
+        'DD-API-KEY': API_KEY!,
+        'DD-APPLICATION-KEY': APP_KEY!,
       },
     })
 
-    return await response.json()
+    return await res.json()
   }
 
-  // Vercel Analytics integration
   static async getVercelAnalytics() {
     const token = process.env.VERCEL_ACCESS_TOKEN
     const teamId = process.env.VERCEL_TEAM_ID
 
-    const response = await fetch(`https://api.vercel.com/v1/analytics?teamId=${teamId}`, {
+    const res = await fetch(`https://api.vercel.com/v1/analytics?teamId=${teamId}`, {
       headers: {
         Authorization: `Bearer ${token}`,
       },
     })
 
-    return await response.json()
+    return await res.json()
   }
 }
 
-// 5. LOG ANALYSIS
 export class LogAnalyzer {
-  // Analyze application logs for errors and patterns
   static async analyzeErrorLogs(logFilePath: string) {
-    const fs = require("fs")
-    const readline = require("readline")
-
-    const fileStream = fs.createReadStream(logFilePath)
     const rl = readline.createInterface({
-      input: fileStream,
-      crlfDelay: Number.POSITIVE_INFINITY,
+      input: fs.createReadStream(logFilePath),
+      crlfDelay: Infinity,
     })
 
-    const errors = []
     const errorPatterns = /ERROR|FATAL|Exception|Error:/i
+    const logs: any[] = []
 
     for await (const line of rl) {
       if (errorPatterns.test(line)) {
-        errors.push({
+        logs.push({
           timestamp: this.extractTimestamp(line),
           message: line,
           level: this.extractLogLevel(line),
@@ -313,35 +252,35 @@ export class LogAnalyzer {
       }
     }
 
-    return this.categorizeErrors(errors)
+    return this.categorizeErrors(logs)
   }
 
   private static extractTimestamp(line: string): Date {
-    const timestampMatch = line.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/)
-    return timestampMatch ? new Date(timestampMatch[0]) : new Date()
+    const match = line.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/)
+    return match ? new Date(match[0]) : new Date()
   }
 
   private static extractLogLevel(line: string): string {
-    const levelMatch = line.match(/(ERROR|FATAL|WARN|INFO|DEBUG)/i)
-    return levelMatch ? levelMatch[1].toUpperCase() : "UNKNOWN"
+    const match = line.match(/(ERROR|FATAL|WARN|INFO|DEBUG)/i)
+    return match ? match[1].toUpperCase() : 'UNKNOWN'
   }
 
   private static categorizeErrors(errors: any[]) {
     const categories = {
-      database: errors.filter((e) => /database|sql|mongo|postgres/i.test(e.message)),
-      authentication: errors.filter((e) => /auth|login|token|unauthorized/i.test(e.message)),
-      network: errors.filter((e) => /network|timeout|connection|socket/i.test(e.message)),
-      validation: errors.filter((e) => /validation|invalid|required|missing/i.test(e.message)),
+      database: [],
+      authentication: [],
+      network: [],
+      validation: [],
       other: [],
     }
 
-    categories.other = errors.filter(
-      (e) =>
-        !categories.database.includes(e) &&
-        !categories.authentication.includes(e) &&
-        !categories.network.includes(e) &&
-        !categories.validation.includes(e),
-    )
+    for (const e of errors) {
+      if (/database|sql|mongo|postgres/i.test(e.message)) categories.database.push(e)
+      else if (/auth|login|token|unauthorized/i.test(e.message)) categories.authentication.push(e)
+      else if (/network|timeout|connection|socket/i.test(e.message)) categories.network.push(e)
+      else if (/validation|invalid|required|missing/i.test(e.message)) categories.validation.push(e)
+      else categories.other.push(e)
+    }
 
     return categories
   }
