@@ -3,7 +3,7 @@
 // React hook for collecting real metrics
 
 import { useState, useEffect } from "react"
-import { RealTimeDataCollector, FrontendMetricsCollector } from "../lib/real-time-collector"
+import { RealTimeDataCollector, FrontendMetricsCollector } from "../lib/data-collectors"
 
 export function useRealMetrics() {
   const [metrics, setMetrics] = useState<any>(null)
