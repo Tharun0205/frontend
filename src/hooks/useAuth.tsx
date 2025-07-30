@@ -1,8 +1,8 @@
     "use client"
 
-    import { useState, useEffect, createContext, useContext, type ReactNode } from "react"
     import axios from "axios"
-    import { toast } from "react-hot-toast"
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react"
+import { toast } from "react-hot-toast"
 
     interface User {
     id: string
@@ -39,7 +39,7 @@
 
     const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
-    const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000"
+    const API_URL ="https://backend-fz9m.onrender.com"
 
     export function AuthProvider({ children }: { children: ReactNode }) {
     const [user, setUser] = useState<User | null>(null)
